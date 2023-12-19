@@ -1,6 +1,6 @@
 diff --git a/.github/workflows/android.yml b/.github/workflows/android.yml
 new file mode 100644
-index 00000000000..2ce7f01643e
+index 00000000000..485892319f5
 --- /dev/null
 +++ b/.github/workflows/android.yml
 @@ -0,0 +1,70 @@
@@ -51,7 +51,7 @@ index 00000000000..2ce7f01643e
 +          cd ..
 +          envsubst <android-${{matrix.arch}} >build-crossfile
 +          meson setup "build-android" \
-+            --prefix=/tmp/fd \
++            --prefix=/tmp/mesa \
 +            --cross-file "build-crossfile" \
 +            -Dplatforms=android \
 +            -Dplatform-sdk-version=26 \
@@ -72,8 +72,9 @@ index 00000000000..2ce7f01643e
 +      - name: Upload libraries
 +        uses: actions/upload-artifact@v2
 +        with:
-+          name: freedreno_${{matrix.arch}}
-+          path: /tmp/fd
++          name: libOSMesa_${{matrix.arch}}
++          path: /tmp/mesa
+\ No newline at end of file
 diff --git a/.github/workflows/macos.yml b/.github/workflows/macos.yml
 deleted file mode 100644
 index d1b66ef4cad..00000000000
@@ -261,21 +262,21 @@ index 00000000000..5fae96b7d1e
 +
 +endian = 'little'
 diff --git a/meson.build b/meson.build
-index 372f0a5cbe3..5ad72cd147c 100644
+index e3560589f83..44790f80ecc 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -187,6 +187,10 @@ if freedreno_kmds.length() == 1 and freedreno_kmds.contains('kgsl') and not with
-   system_has_kms_drm = false
- endif
+@@ -196,6 +196,10 @@ foreach gallium_driver : gallium_drivers
+   pre_args += '-DHAVE_@0@'.format(gallium_driver.to_upper())
+ endforeach
  
-+if freedreno_kmds.contains('kgsl')
++if get_option('freedreno-kmds').contains('kgsl')
 +  pre_args += '-DHAVE_FREEDRENO_KGSL'
 +endif
 +
  with_gallium = gallium_drivers.length() != 0
  with_gallium_kmsro = system_has_kms_drm and [
    with_gallium_asahi,
-@@ -1889,9 +1893,6 @@ if dep_unwind.found()
+@@ -1959,9 +1963,6 @@ if dep_unwind.found()
  endif
  
  if with_osmesa
@@ -298,10 +299,10 @@ index 6097ae8ef07..0e3f27bc4a5 100644
    if with_libbacktrace
      lib_names += ['backtrace']
 diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
-index 4ffde1da029..45e8514457c 100644
+index 4fb5621edf8..1f24ccaf685 100644
 --- a/src/egl/drivers/dri2/platform_android.c
 +++ b/src/egl/drivers/dri2/platform_android.c
-@@ -409,6 +409,64 @@ cros_get_buffer_info(struct dri2_egl_display *dri2_dpy,
+@@ -410,6 +410,64 @@ cros_get_buffer_info(struct dri2_egl_display *dri2_dpy,
     return -EINVAL;
  }
  
@@ -365,8 +366,8 @@ index 4ffde1da029..45e8514457c 100644
 +
  static __DRIimage *
  droid_create_image_from_buffer_info(struct dri2_egl_display *dri2_dpy,
-                                     struct buffer_info *buf_info,
-@@ -456,6 +514,9 @@ droid_create_image_from_native_buffer(_EGLDisplay *disp,
+                                     struct buffer_info *buf_info, void *priv)
+@@ -455,6 +513,9 @@ droid_create_image_from_native_buffer(_EGLDisplay *disp,
     if (!img && !cros_get_buffer_info(dri2_dpy, buf, &buf_info))
        img = droid_create_image_from_buffer_info(dri2_dpy, &buf_info, priv);
  
@@ -376,25 +377,11 @@ index 4ffde1da029..45e8514457c 100644
     if (!img && !native_window_buffer_get_buffer_info(dri2_dpy, buf, &buf_info))
        img = droid_create_image_from_buffer_info(dri2_dpy, &buf_info, priv);
  
-@@ -1557,7 +1618,7 @@ droid_probe_device(_EGLDisplay *disp, bool swrast)
- 
- #ifdef HAVE_DRM_GRALLOC
- static EGLBoolean
--droid_open_device(_EGLDisplay *disp, bool swrast)
-+droid_open_device_drm_gralloc(_EGLDisplay *disp, bool swrast)
- {
-    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
-    int fd = -1, err = -EINVAL;
-@@ -1583,9 +1644,44 @@ droid_open_device(_EGLDisplay *disp, bool swrast)
- 
-    return droid_probe_device(disp, swrast);
+@@ -1396,9 +1457,46 @@ droid_probe_device(_EGLDisplay *disp, bool swrast)
+    return EGL_TRUE;
  }
--#else
-+#endif
-+
- static EGLBoolean
--droid_open_device(_EGLDisplay *disp, bool swrast)
-+droid_open_device_kgsl(_EGLDisplay *disp, bool swrast)
+ 
++static EGLBoolean droid_open_device_kgsl(_EGLDisplay *disp, bool swrast)
 +{
 +   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
 +   static const char path[] = "/dev/kgsl-3d0";
@@ -427,56 +414,20 @@ index 4ffde1da029..45e8514457c 100644
 +   return EGL_FALSE;
 +}
 +
-+static EGLBoolean
-+droid_open_device_drm(_EGLDisplay *disp, bool swrast)
+ static EGLBoolean
+ droid_open_device(_EGLDisplay *disp, bool swrast)
  {
++#ifdef HAVE_FREEDRENO_KGSL
++   if (droid_open_device_kgsl(disp, swrast))
++      goto done;
++#endif
  #define MAX_DRM_DEVICES 64
     struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
-@@ -1660,12 +1756,35 @@ droid_open_device(_EGLDisplay *disp, bool swrast)
- #undef MAX_DRM_DEVICES
- }
+    _EGLDevice *dev_list = _eglGlobal.DeviceList;
+@@ -1509,6 +1607,15 @@ dri2_initialize_android(_EGLDisplay *disp)
+       goto cleanup;
+    }
  
-+static EGLBoolean
-+droid_open_device(_EGLDisplay *disp, bool swrast)
-+{
-+#ifdef HAVE_DRM_GRALLOC
-+   if (droid_open_device_drm_gralloc(disp, swrat))
-+      goto done;
-+#endif
-+
-+#ifdef HAVE_LIBDRM
-+   if(droid_open_device_drm(disp, swrast))
-+      goto done;
- #endif
- 
-+#ifdef HAVE_FREEDRENO_KGSL
-+   if(droid_open_device_kgsl(disp, swrast))
-+      goto done;
-+#endif
-+
-+   /* If we got to here, all the above calls fails */
-+   return EGL_FALSE;
-+
-+done:
-+   return EGL_TRUE;
-+}
-+
- EGLBoolean
- dri2_initialize_android(_EGLDisplay *disp)
- {
--   _EGLDevice *dev;
-+   _EGLDevice *dev = NULL;
-    bool device_opened = false;
-    struct dri2_egl_display *dri2_dpy;
-    const char *err;
-@@ -1694,10 +1813,13 @@ dri2_initialize_android(_EGLDisplay *disp)
- 
-    dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
- 
--   dev = _eglAddDevice(dri2_dpy->fd_render_gpu, false);
--   if (!dev) {
--      err = "DRI2: failed to find EGLDevice";
--      goto cleanup;
 +   /* Only add a egl device if this is not the kgsl driver */
 +   if (strcmp(dri2_dpy->driver_name, "kgsl") != 0) {
 +      dev = _eglAddDevice(dri2_dpy->fd_render_gpu, false);
@@ -484,109 +435,16 @@ index 4ffde1da029..45e8514457c 100644
 +         err = "DRI2: failed to find EGLDevice";
 +         goto cleanup;
 +      }
-    }
- 
-    disp->Device = dev;
-diff --git a/src/freedreno/drm/freedreno_bo.c b/src/freedreno/drm/freedreno_bo.c
-index 3f15f52e799..b68e2558ec8 100644
---- a/src/freedreno/drm/freedreno_bo.c
-+++ b/src/freedreno/drm/freedreno_bo.c
-@@ -222,7 +222,7 @@ fd_bo_from_handle(struct fd_device *dev, uint32_t handle, uint32_t size)
- }
- 
- struct fd_bo *
--fd_bo_from_dmabuf(struct fd_device *dev, int fd)
-+fd_bo_from_dmabuf_drm(struct fd_device *dev, int fd)
- {
-    int ret, size;
-    uint32_t handle;
-@@ -257,6 +257,12 @@ fd_bo_from_dmabuf(struct fd_device *dev, int fd)
-    return bo;
- }
- 
-+struct fd_bo *
-+fd_bo_from_dmabuf(struct fd_device *dev, int fd)
-+{
-+   return dev->funcs->bo_from_dmabuf(dev, fd);
-+}
++   }
 +
- struct fd_bo *
- fd_bo_from_name(struct fd_device *dev, uint32_t name)
- {
-@@ -433,6 +439,15 @@ fd_bo_fini_fences(struct fd_bo *bo)
-       free(bo->fences);
- }
- 
-+void
-+fd_bo_close_handle_drm(struct fd_device *dev, uint32_t handle)
-+{
-+   struct drm_gem_close req = {
-+      .handle = handle,
-+   };
-+   drmIoctl(dev->fd, DRM_IOCTL_GEM_CLOSE, &req);
-+}
-+
- /**
-  * Helper called by backends bo->funcs->destroy()
-  *
-@@ -456,10 +471,7 @@ fd_bo_fini_common(struct fd_bo *bo)
- 
-    if (handle) {
-       simple_mtx_lock(&table_lock);
--      struct drm_gem_close req = {
--         .handle = handle,
--      };
--      drmIoctl(dev->fd, DRM_IOCTL_GEM_CLOSE, &req);
-+      dev->funcs->bo_close_handle(dev, handle);
-       _mesa_hash_table_remove_key(dev->handle_table, &handle);
-       if (bo->name)
-          _mesa_hash_table_remove_key(dev->name_table, &bo->name);
-@@ -562,8 +574,8 @@ fd_bo_is_cached(struct fd_bo *bo)
-    return !!(bo->alloc_flags & FD_BO_CACHED_COHERENT);
- }
- 
--static void *
--bo_map(struct fd_bo *bo)
-+void *
-+fd_bo_map_os_mmap(struct fd_bo *bo)
- {
-    if (!bo->map) {
-       uint64_t offset;
-@@ -593,7 +605,7 @@ fd_bo_map(struct fd_bo *bo)
-    if (bo->alloc_flags & FD_BO_NOMAP)
-       return NULL;
- 
--   return bo_map(bo);
-+   return bo->funcs->map(bo);
- }
- 
- void
-@@ -604,7 +616,7 @@ fd_bo_upload(struct fd_bo *bo, void *src, unsigned off, unsigned len)
-       return;
-    }
- 
--   memcpy((uint8_t *)bo_map(bo) + off, src, len);
-+   memcpy((uint8_t *)bo->funcs->map(bo) + off, src, len);
- }
- 
- bool
-diff --git a/src/freedreno/drm/freedreno_bo_heap.c b/src/freedreno/drm/freedreno_bo_heap.c
-index 413c388bf0e..dc1af739d23 100644
---- a/src/freedreno/drm/freedreno_bo_heap.c
-+++ b/src/freedreno/drm/freedreno_bo_heap.c
-@@ -176,6 +176,7 @@ sa_destroy(struct fd_bo *bo)
- static struct fd_bo_funcs heap_bo_funcs = {
-       .madvise = sa_madvise,
-       .iova = sa_iova,
-+      .map = fd_bo_map_os_mmap,
-       .set_name = sa_set_name,
-       .destroy = sa_destroy,
- };
+    if (!dri2_setup_device(disp, false)) {
+       err = "DRI2: failed to setup EGLDevice";
+       goto cleanup;
 diff --git a/src/freedreno/drm/freedreno_device.c b/src/freedreno/drm/freedreno_device.c
-index cff09fd8fbb..faa3c7e8669 100644
+index cff09fd8fbb..6b854de8c52 100644
 --- a/src/freedreno/drm/freedreno_device.c
 +++ b/src/freedreno/drm/freedreno_device.c
-@@ -37,22 +37,26 @@ struct fd_device *msm_device_new(int fd, drmVersionPtr version);
+@@ -37,22 +37,25 @@ struct fd_device *msm_device_new(int fd, drmVersionPtr version);
  #ifdef HAVE_FREEDRENO_VIRTIO
  struct fd_device *virtio_device_new(int fd, drmVersionPtr version);
  #endif
@@ -610,16 +468,16 @@ index cff09fd8fbb..faa3c7e8669 100644
 -      ERROR_MSG("cannot get version: %s", strerror(errno));
 -      return NULL;
 -   }
+-
+-   if (!strcmp(version->name, "msm")) {
 +   if (!version)
 +      DEBUG_MSG("cannot get version: %s", strerror(errno));
 +#endif
- 
--   if (!strcmp(version->name, "msm")) {
 +   if (version && !strcmp(version->name, "msm")) {
        DEBUG_MSG("msm DRM device");
        if (version->version_major != 1) {
           ERROR_MSG("unsupported version: %u.%u.%u", version->version_major,
-@@ -62,7 +66,7 @@ fd_device_new(int fd)
+@@ -62,7 +65,7 @@ fd_device_new(int fd)
  
        dev = msm_device_new(fd, version);
  #ifdef HAVE_FREEDRENO_VIRTIO
@@ -628,25 +486,21 @@ index cff09fd8fbb..faa3c7e8669 100644
        DEBUG_MSG("virtio_gpu DRM device");
        dev = virtio_device_new(fd, version);
        /* Only devices that support a hypervisor are a6xx+, so avoid the
-@@ -70,10 +74,14 @@ fd_device_new(int fd)
-        */
+@@ -71,9 +74,12 @@ fd_device_new(int fd)
        use_heap = true;
  #endif
--#if HAVE_FREEDRENO_KGSL
+ #if HAVE_FREEDRENO_KGSL
 -   } else if (!strcmp(version->name, "kgsl")) {
--      DEBUG_MSG("kgsl DRM device");
-+#ifdef HAVE_FREEDRENO_KGSL
 +   } else {
-+      /* If drm driver not detected assume this is KGSL */
+       DEBUG_MSG("kgsl DRM device");
        dev = kgsl_device_new(fd);
-+      /* Userspace fences are not supported with KGSL */
 +      support_use_heap = false;
 +      if (dev)
 +         goto out;
  #endif
     }
  
-@@ -113,7 +121,7 @@ fd_device_new(int fd)
+@@ -113,7 +119,7 @@ out:
        fd_pipe_del(pipe);
     }
  
@@ -655,7 +509,7 @@ index cff09fd8fbb..faa3c7e8669 100644
        dev->ring_heap = fd_bo_heap_new(dev, RING_FLAGS);
        dev->default_heap = fd_bo_heap_new(dev, 0);
     }
-@@ -226,6 +234,12 @@ fd_dbg(void)
+@@ -226,6 +232,12 @@ fd_dbg(void)
     return debug_get_option_libgl();
  }
  
@@ -669,7 +523,7 @@ index cff09fd8fbb..faa3c7e8669 100644
  fd_has_syncobj(struct fd_device *dev)
  {
 diff --git a/src/freedreno/drm/freedreno_drmif.h b/src/freedreno/drm/freedreno_drmif.h
-index 6a20e7ac3dd..15b003d582e 100644
+index b86b6c570e8..8c8c6f477bb 100644
 --- a/src/freedreno/drm/freedreno_drmif.h
 +++ b/src/freedreno/drm/freedreno_drmif.h
 @@ -67,6 +67,13 @@ enum fd_param_id {
@@ -686,7 +540,7 @@ index 6a20e7ac3dd..15b003d582e 100644
  /**
   * Helper for fence/seqno comparisions which deals properly with rollover.
   * Returns true if fence 'a' is before fence 'b'
-@@ -184,8 +191,15 @@ enum fd_version {
+@@ -183,6 +190,12 @@ enum fd_version {
  };
  enum fd_version fd_device_version(struct fd_device *dev);
  
@@ -698,11 +552,8 @@ index 6a20e7ac3dd..15b003d582e 100644
 +uint32_t fd_get_features(struct fd_device *dev);
  bool fd_has_syncobj(struct fd_device *dev);
  
-+
  /* pipe functions:
-  */
- 
-@@ -205,6 +219,7 @@ int fd_pipe_wait(struct fd_pipe *pipe, const struct fd_fence *fence);
+@@ -204,6 +217,7 @@ int fd_pipe_wait(struct fd_pipe *pipe, const struct fd_fence *fence);
  /* timeout in nanosec */
  int fd_pipe_wait_timeout(struct fd_pipe *pipe, const struct fd_fence *fence,
                           uint64_t timeout);
@@ -710,7 +561,7 @@ index 6a20e7ac3dd..15b003d582e 100644
  
  /* buffer-object functions:
   */
-@@ -286,6 +301,7 @@ struct fd_bo *fd_bo_from_handle(struct fd_device *dev, uint32_t handle,
+@@ -285,6 +299,7 @@ struct fd_bo *fd_bo_from_handle(struct fd_device *dev, uint32_t handle,
                                  uint32_t size);
  struct fd_bo *fd_bo_from_name(struct fd_device *dev, uint32_t name);
  struct fd_bo *fd_bo_from_dmabuf(struct fd_device *dev, int fd);
@@ -719,10 +570,10 @@ index 6a20e7ac3dd..15b003d582e 100644
  
  static inline uint64_t
 diff --git a/src/freedreno/drm/freedreno_pipe.c b/src/freedreno/drm/freedreno_pipe.c
-index a62993b5a0e..033181e8cf7 100644
+index 13e8ad979e8..9fd443a9631 100644
 --- a/src/freedreno/drm/freedreno_pipe.c
 +++ b/src/freedreno/drm/freedreno_pipe.c
-@@ -212,6 +212,12 @@ fd_pipe_emit_fence(struct fd_pipe *pipe, struct fd_ringbuffer *ring)
+@@ -213,6 +213,12 @@ fd_pipe_emit_fence(struct fd_pipe *pipe, struct fd_ringbuffer *ring)
     return fence;
  }
  
@@ -736,19 +587,10 @@ index a62993b5a0e..033181e8cf7 100644
  fd_fence_new(struct fd_pipe *pipe, bool use_fence_fd)
  {
 diff --git a/src/freedreno/drm/freedreno_priv.h b/src/freedreno/drm/freedreno_priv.h
-index 59261626c22..f60695aafe3 100644
+index 9fd12fa22a1..ebbd7cb48d4 100644
 --- a/src/freedreno/drm/freedreno_priv.h
 +++ b/src/freedreno/drm/freedreno_priv.h
-@@ -108,6 +108,8 @@ struct fd_device_funcs {
-     */
-    struct fd_bo *(*bo_from_handle)(struct fd_device *dev, uint32_t size,
-                                    uint32_t handle);
-+   struct fd_bo *(*bo_from_dmabuf)(struct fd_device *dev, int fd);
-+   void (*bo_close_handle)(struct fd_device *dev, uint32_t handle);
- 
-    struct fd_pipe *(*pipe_new)(struct fd_device *dev, enum fd_pipe_id id,
-                                unsigned prio);
-@@ -204,6 +206,7 @@ struct fd_device {
+@@ -207,6 +207,7 @@ struct fd_device {
     int fd;
     enum fd_version version;
     int32_t refcnt;
@@ -756,7 +598,7 @@ index 59261626c22..f60695aafe3 100644
  
     /* tables to keep track of bo's, to avoid "evil-twin" fd_bo objects:
      *
-@@ -305,6 +308,7 @@ struct fd_pipe_funcs {
+@@ -308,6 +309,7 @@ struct fd_pipe_funcs {
     struct fd_ringbuffer *(*ringbuffer_new_object)(struct fd_pipe *pipe,
                                                    uint32_t size);
     struct fd_submit *(*submit_new)(struct fd_pipe *pipe);
@@ -764,33 +606,9 @@ index 59261626c22..f60695aafe3 100644
  
     /**
      * Flush any deferred submits (if deferred submits are supported by
-@@ -419,6 +423,7 @@ fd_dev_count_deferred_cmds(struct fd_device *dev)
- 
- struct fd_bo_funcs {
-    int (*offset)(struct fd_bo *bo, uint64_t *offset);
-+   void *(*map)(struct fd_bo *bo);
-    int (*cpu_prep)(struct fd_bo *bo, struct fd_pipe *pipe, uint32_t op);
-    int (*madvise)(struct fd_bo *bo, int willneed);
-    uint64_t (*iova)(struct fd_bo *bo);
-@@ -451,6 +456,7 @@ struct fd_bo_funcs {
- };
- 
- void fd_bo_add_fence(struct fd_bo *bo, struct fd_fence *fence);
-+void *fd_bo_map_os_mmap(struct fd_bo *bo);
- 
- enum fd_bo_state {
-    FD_BO_STATE_IDLE,
-@@ -464,6 +470,7 @@ void fd_bo_fini_fences(struct fd_bo *bo);
- void fd_bo_fini_common(struct fd_bo *bo);
- 
- struct fd_bo *fd_bo_new_ring(struct fd_device *dev, uint32_t size);
-+void fd_bo_close_handle_drm(struct fd_device *dev, uint32_t handle);
- 
- #define enable_debug 0 /* TODO make dynamic */
- 
 diff --git a/src/freedreno/drm/kgsl/kgsl_bo.c b/src/freedreno/drm/kgsl/kgsl_bo.c
 new file mode 100644
-index 00000000000..e32c50c7b4d
+index 00000000000..6e4124589fe
 --- /dev/null
 +++ b/src/freedreno/drm/kgsl/kgsl_bo.c
 @@ -0,0 +1,208 @@
@@ -835,13 +653,13 @@ index 00000000000..e32c50c7b4d
 +}
 +
 +void
-+kgsl_bo_close_handle(struct fd_device *dev, uint32_t handle)
++kgsl_bo_close_handle(struct fd_bo *bo)
 +{
 +    struct kgsl_gpumem_free_id req = {
-+        .id = handle
++        .id = bo->handle
 +    };
 +
-+    kgsl_pipe_safe_ioctl(dev->fd, IOCTL_KGSL_GPUMEM_FREE_ID, &req);
++    kgsl_pipe_safe_ioctl(bo->dev->fd, IOCTL_KGSL_GPUMEM_FREE_ID, &req);
 +}
 +
 +static void
@@ -1283,7 +1101,7 @@ index 00000000000..7adec108dd0
 +}
 diff --git a/src/freedreno/drm/kgsl/kgsl_priv.h b/src/freedreno/drm/kgsl/kgsl_priv.h
 new file mode 100644
-index 00000000000..382b64f2ae5
+index 00000000000..ed65c952902
 --- /dev/null
 +++ b/src/freedreno/drm/kgsl/kgsl_priv.h
 @@ -0,0 +1,54 @@
@@ -1338,7 +1156,7 @@ index 00000000000..382b64f2ae5
 +struct fd_bo *kgsl_bo_new(struct fd_device *dev, uint32_t size, uint32_t flags);
 +struct fd_bo *kgsl_bo_from_dmabuf(struct fd_device *dev, int fd);
 +struct fd_bo *kgsl_bo_from_handle(struct fd_device *dev, uint32_t size, uint32_t handle);
-+void kgsl_bo_close_handle(struct fd_device *dev, uint32_t handle);
++void kgsl_bo_close_handle(struct fd_bo *bo);
 +
 +#endif
 diff --git a/src/freedreno/drm/kgsl/kgsl_ringbuffer_sp.c b/src/freedreno/drm/kgsl/kgsl_ringbuffer_sp.c
@@ -1467,11 +1285,11 @@ index 00000000000..e8b2842ac3d
 +    return fd_submit_sp_new(pipe, flush_submit_list);
 +}
 diff --git a/src/freedreno/drm/meson.build b/src/freedreno/drm/meson.build
-index 90ce1921228..a7d33edbe1a 100644
+index 72b1137e277..a4cbf8e77f0 100644
 --- a/src/freedreno/drm/meson.build
 +++ b/src/freedreno/drm/meson.build
-@@ -68,6 +68,17 @@ if freedreno_kmds.contains('virtio')
-   libfreedreno_drm_includes += inc_virtio_gpu
+@@ -69,6 +69,17 @@ if freedreno_kmds.contains('virtio')
+   ]
  endif
  
 +libfreedreno_kgsl_files = files(
@@ -1488,66 +1306,11 @@ index 90ce1921228..a7d33edbe1a 100644
  libfreedreno_drm = static_library(
    'freedreno_drm',
    [
-@@ -83,4 +94,3 @@ libfreedreno_drm = static_library(
-   ],
-   build_by_default : false,
- )
--
-diff --git a/src/freedreno/drm/msm/msm_bo.c b/src/freedreno/drm/msm/msm_bo.c
-index 4f9f4826bb8..2d0b424ba1e 100644
---- a/src/freedreno/drm/msm/msm_bo.c
-+++ b/src/freedreno/drm/msm/msm_bo.c
-@@ -138,6 +138,7 @@ msm_bo_set_name(struct fd_bo *bo, const char *fmt, va_list ap)
- 
- static const struct fd_bo_funcs funcs = {
-    .offset = msm_bo_offset,
-+   .map = fd_bo_map_os_mmap,
-    .cpu_prep = msm_bo_cpu_prep,
-    .madvise = msm_bo_madvise,
-    .iova = msm_bo_iova,
-diff --git a/src/freedreno/drm/msm/msm_device.c b/src/freedreno/drm/msm/msm_device.c
-index 4e353c1375c..605808a3d4b 100644
---- a/src/freedreno/drm/msm/msm_device.c
-+++ b/src/freedreno/drm/msm/msm_device.c
-@@ -38,6 +38,8 @@ msm_device_destroy(struct fd_device *dev)
- static const struct fd_device_funcs funcs = {
-    .bo_new = msm_bo_new,
-    .bo_from_handle = msm_bo_from_handle,
-+   .bo_from_dmabuf = fd_bo_from_dmabuf_drm,
-+   .bo_close_handle = fd_bo_close_handle_drm,
-    .pipe_new = msm_pipe_new,
-    .destroy = msm_device_destroy,
- };
-diff --git a/src/freedreno/drm/virtio/virtio_bo.c b/src/freedreno/drm/virtio/virtio_bo.c
-index f5c1ace788c..8a1ad29e218 100644
---- a/src/freedreno/drm/virtio/virtio_bo.c
-+++ b/src/freedreno/drm/virtio/virtio_bo.c
-@@ -273,6 +273,7 @@ virtio_bo_finalize(struct fd_bo *bo)
- 
- static const struct fd_bo_funcs funcs = {
-    .offset = virtio_bo_offset,
-+   .map = fd_bo_map_os_mmap,
-    .cpu_prep = virtio_bo_cpu_prep,
-    .madvise = virtio_bo_madvise,
-    .iova = virtio_bo_iova,
-diff --git a/src/freedreno/drm/virtio/virtio_device.c b/src/freedreno/drm/virtio/virtio_device.c
-index f2daf0aa09f..f37ff354c67 100644
---- a/src/freedreno/drm/virtio/virtio_device.c
-+++ b/src/freedreno/drm/virtio/virtio_device.c
-@@ -42,6 +42,8 @@ virtio_device_destroy(struct fd_device *dev)
- static const struct fd_device_funcs funcs = {
-    .bo_new = virtio_bo_new,
-    .bo_from_handle = virtio_bo_from_handle,
-+   .bo_from_dmabuf = fd_bo_from_dmabuf_drm,
-+   .bo_close_handle = fd_bo_close_handle_drm,
-    .pipe_new = virtio_pipe_new,
-    .flush = virtio_execbuf_flush,
-    .destroy = virtio_device_destroy,
 diff --git a/src/freedreno/ir3/ir3_compiler.c b/src/freedreno/ir3/ir3_compiler.c
-index b827da1fe3c..d8773eac47d 100644
+index 80ca0656df7..b4573e7f015 100644
 --- a/src/freedreno/ir3/ir3_compiler.c
 +++ b/src/freedreno/ir3/ir3_compiler.c
-@@ -293,9 +293,6 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
+@@ -309,9 +309,6 @@ ir3_compiler_create(struct fd_device *dev, const struct fd_dev_id *dev_id,
     if (compiler->gen >= 5 && !(ir3_shader_debug & IR3_DBG_NOFP16))
        compiler->nir_options.support_16bit_alu = true;
  
@@ -1558,7 +1321,7 @@ index b827da1fe3c..d8773eac47d 100644
  }
  
 diff --git a/src/freedreno/ir3/ir3_disk_cache.c b/src/freedreno/ir3/ir3_disk_cache.c
-index ff73b37a0db..e6c3cef1cb6 100644
+index a7c39556956..2f16baafeab 100644
 --- a/src/freedreno/ir3/ir3_disk_cache.c
 +++ b/src/freedreno/ir3/ir3_disk_cache.c
 @@ -56,7 +56,7 @@ ir3_disk_cache_init(struct ir3_compiler *compiler)
@@ -1570,8 +1333,23 @@ index ff73b37a0db..e6c3cef1cb6 100644
     assert(id_sha1);
  
     char timestamp[41];
+diff --git a/src/freedreno/meson.build b/src/freedreno/meson.build
+index a5cdefbd01b..97090a09338 100644
+--- a/src/freedreno/meson.build
++++ b/src/freedreno/meson.build
+@@ -28,8 +28,8 @@ rnn_path = rnn_src_path + ':' + get_option('prefix') + '/' + rnn_install_path
+ dep_lua = dependency('lua54', 'lua53', 'lua52', 'lua', required: false,
+                      fallback : ['lua', 'lua_dep'], version: '>=5.2')
+ 
+-dep_libarchive = dependency('libarchive', fallback : ['libarchive', 'libarchive_dep'], required: false)
+-dep_libxml2 = dependency('libxml-2.0', fallback: ['libxml2', 'libxml2_dep'], required: false)
++dep_libarchive = dependency('libarchive', required: false)
++dep_libxml2 = dependency('libxml-2.0', required: false)
+ prog_gzip = find_program('gzip', required: false)
+ 
+ install_fd_decode_tools = dep_libxml2.found() and prog_gzip.found() and \
 diff --git a/src/gallium/auxiliary/target-helpers/inline_sw_helper.h b/src/gallium/auxiliary/target-helpers/inline_sw_helper.h
-index d821008b534..aabf21bc5a2 100644
+index ddb67b3a25a..91543ade4cc 100644
 --- a/src/gallium/auxiliary/target-helpers/inline_sw_helper.h
 +++ b/src/gallium/auxiliary/target-helpers/inline_sw_helper.h
 @@ -8,6 +8,10 @@
@@ -1585,27 +1363,23 @@ index d821008b534..aabf21bc5a2 100644
  /* Helper function to choose and instantiate one of the software rasterizers:
   * llvmpipe, softpipe.
   */
-@@ -25,10 +29,18 @@
- #include "virgl/vtest/virgl_vtest_public.h"
+@@ -29,6 +33,14 @@
+ #include "d3d12/d3d12_public.h"
  #endif
  
 +#ifdef GALLIUM_ZINK
 +#include "zink/zink_public.h"
 +#endif
 +
- #ifdef GALLIUM_D3D12
- #include "d3d12/d3d12_public.h"
- #endif
- 
 +#ifdef GALLIUM_FREEDRENO
 +#include "freedreno/freedreno_public.h"
 +#endif
 +
- #if defined(GALLIUM_ASAHI) && __APPLE__
- #include "asahi/agx_public.h"
- #endif
-@@ -71,10 +83,23 @@ sw_screen_create_named(struct sw_winsys *winsys, const char *driver)
-       screen = agx_screen_create(0, NULL, winsys);
+ static inline struct pipe_screen *
+ sw_screen_create_named(struct sw_winsys *winsys, const char *driver)
+ {
+@@ -62,6 +74,18 @@ sw_screen_create_named(struct sw_winsys *winsys, const char *driver)
+       screen = d3d12_create_dxcore_screen(winsys, NULL);
  #endif
  
 +#if defined(GALLIUM_FREEDRENO)
@@ -1618,22 +1392,16 @@ index d821008b534..aabf21bc5a2 100644
 +         screen = fd_screen_create(kbase_device_fd, &dummy_cfg, NULL);
 +      }
 +   }
-+#else
-+#error You forgot to include Freedreno
 +#endif
 +
     return screen ? debug_screen_wrap(screen) : NULL;
  }
  
--
- static inline struct pipe_screen *
- sw_screen_create_vk(struct sw_winsys *winsys, bool sw_vk)
- {
 diff --git a/src/gallium/drivers/freedreno/freedreno_context.c b/src/gallium/drivers/freedreno/freedreno_context.c
-index b566a30dc56..34718766aec 100644
+index e7f0981514b..e88f74ecc08 100644
 --- a/src/gallium/drivers/freedreno/freedreno_context.c
 +++ b/src/gallium/drivers/freedreno/freedreno_context.c
-@@ -492,6 +492,22 @@ fd_get_device_reset_status(struct pipe_context *pctx)
+@@ -498,6 +498,22 @@ fd_get_device_reset_status(struct pipe_context *pctx)
     return status;
  }
  
@@ -1656,7 +1424,7 @@ index b566a30dc56..34718766aec 100644
  static void
  fd_trace_record_ts(struct u_trace *ut, void *cs, void *timestamps,
                     unsigned idx, bool end_of_pipe)
-@@ -657,11 +673,6 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
+@@ -663,11 +679,6 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
  
     ctx->in_fence_fd = -1;
  
@@ -1668,14 +1436,7 @@ index b566a30dc56..34718766aec 100644
     simple_mtx_init(&ctx->gmem_lock, mtx_plain);
  
     /* need some sane default in case gallium frontends don't
-@@ -676,13 +687,20 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
-    pctx->flush = fd_context_flush;
-    pctx->emit_string_marker = fd_emit_string_marker;
-    pctx->set_debug_callback = fd_set_debug_callback;
--   pctx->get_device_reset_status = fd_get_device_reset_status;
-    pctx->create_fence_fd = fd_create_pipe_fence_fd;
-    pctx->fence_server_sync = fd_pipe_fence_server_sync;
-    pctx->fence_server_signal = fd_pipe_fence_server_signal;
+@@ -689,6 +700,14 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
     pctx->texture_barrier = fd_texture_barrier;
     pctx->memory_barrier = fd_memory_barrier;
  
@@ -1692,7 +1453,7 @@ index b566a30dc56..34718766aec 100644
        goto fail;
 diff --git a/src/gallium/drivers/freedreno/freedreno_public.h b/src/gallium/drivers/freedreno/freedreno_public.h
 new file mode 100644
-index 00000000000..36b87cf86ff
+index 00000000000..d6779da1b31
 --- /dev/null
 +++ b/src/gallium/drivers/freedreno/freedreno_public.h
 @@ -0,0 +1,41 @@
@@ -1737,8 +1498,9 @@ index 00000000000..36b87cf86ff
 +#endif
 +
 +#endif
+\ No newline at end of file
 diff --git a/src/gallium/drivers/freedreno/freedreno_screen.c b/src/gallium/drivers/freedreno/freedreno_screen.c
-index 30c9c80db42..c57687f86d0 100644
+index d04ab107eef..98793460574 100644
 --- a/src/gallium/drivers/freedreno/freedreno_screen.c
 +++ b/src/gallium/drivers/freedreno/freedreno_screen.c
 @@ -65,6 +65,7 @@
@@ -1749,7 +1511,7 @@ index 30c9c80db42..c57687f86d0 100644
  
  /* clang-format off */
  static const struct debug_named_value fd_debug_options[] = {
-@@ -578,6 +579,11 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
+@@ -625,6 +626,11 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
        return 0;
     case PIPE_CAP_THROTTLE:
        return screen->driconf.enable_throttling;
@@ -1761,22 +1523,7 @@ index 30c9c80db42..c57687f86d0 100644
     default:
        return u_pipe_screen_get_param_defaults(pscreen, param);
     }
-@@ -965,7 +971,7 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
-    } else if (whandle->type == WINSYS_HANDLE_TYPE_FD) {
-       bo = fd_bo_from_dmabuf(screen->dev, whandle->handle);
-    } else {
--      DBG("Attempt to import unsupported handle type %d", whandle->type);
-+      mesa_loge("Attempt to import unsupported handle type %d", whandle->type);
-       return NULL;
-    }
- 
-@@ -1005,12 +1011,13 @@ fd_screen_get_fd(struct pipe_screen *pscreen)
-    return fd_device_fd(screen->dev);
- }
- 
-+// Create screen, back to freedreno_screen.c code
- struct pipe_screen *
- fd_screen_create(int fd,
+@@ -1062,7 +1068,7 @@ fd_screen_create(int fd,
                   const struct pipe_screen_config *config,
                   struct renderonly *ro)
  {
@@ -1785,26 +1532,7 @@ index 30c9c80db42..c57687f86d0 100644
     if (!dev)
        return NULL;
  
-@@ -1052,17 +1059,7 @@ fd_screen_create(int fd,
-       fd_pipe_get_param(screen->pipe, FD_GMEM_BASE, &screen->gmem_base);
-    }
- 
--   if (fd_pipe_get_param(screen->pipe, FD_MAX_FREQ, &val)) {
--      DBG("could not get gpu freq");
--      /* this limits what performance related queries are
--       * supported but is not fatal
--       */
--      screen->max_freq = 0;
--   } else {
--      screen->max_freq = val;
--      if (fd_pipe_get_param(screen->pipe, FD_TIMESTAMP, &val) == 0)
--         screen->has_timestamp = true;
--   }
-+   screen->max_freq = 0;
- 
-    screen->dev_id = fd_pipe_dev_id(screen->pipe);
- 
-@@ -1113,24 +1110,10 @@ fd_screen_create(int fd,
+@@ -1168,24 +1174,10 @@ fd_screen_create(int fd,
  
     screen->has_syncobj = fd_has_syncobj(screen->dev);
  
@@ -1820,25 +1548,16 @@ index 30c9c80db42..c57687f86d0 100644
     struct sysinfo si;
     sysinfo(&si);
     screen->ram_size = si.totalram;
--
+ 
 -   DBG("Pipe Info:");
 -   DBG(" GPU-id:          %s", fd_dev_name(screen->dev_id));
 -   DBG(" Chip-id:         0x%016"PRIx64, screen->chip_id);
 -   DBG(" GMEM size:       0x%08x", screen->gmemsize_bytes);
 -
-+   
-    const struct fd_dev_info *info = fd_dev_info(screen->dev_id);
-    if (!info) {
+    const struct fd_dev_info info = fd_dev_info(screen->dev_id);
+    if (!info.chip) {
        mesa_loge("unsupported GPU: a%03d", screen->gpu_id);
-@@ -1170,7 +1153,6 @@ fd_screen_create(int fd,
-       mesa_loge("unsupported GPU generation: a%uxx", screen->gen);
-       goto fail;
-    }
--
-    /* fdN_screen_init() should set this: */
-    assert(screen->primtypes);
-    screen->primtypes_mask = 0;
-@@ -1178,11 +1160,6 @@ fd_screen_create(int fd,
+@@ -1234,11 +1226,6 @@ fd_screen_create(int fd,
        if (screen->primtypes[i])
           screen->primtypes_mask |= (1 << i);
  
@@ -1851,7 +1570,7 @@ index 30c9c80db42..c57687f86d0 100644
      * growable cmdstream buffers, since memory requirement for cmdstream
      * buffers would be too much otherwise.
 diff --git a/src/gallium/drivers/freedreno/meson.build b/src/gallium/drivers/freedreno/meson.build
-index f0d1e4b569e..40be4eb2b81 100644
+index 0d66d2c1836..017e4a3c973 100644
 --- a/src/gallium/drivers/freedreno/meson.build
 +++ b/src/gallium/drivers/freedreno/meson.build
 @@ -19,6 +19,7 @@
@@ -1863,7 +1582,7 @@ index f0d1e4b569e..40be4eb2b81 100644
    'freedreno_autotune.c',
    'freedreno_autotune.h',
 diff --git a/src/gallium/drivers/zink/zink_bo.c b/src/gallium/drivers/zink/zink_bo.c
-index a69a050f323..15dfab617d3 100644
+index 0ba1e196a0f..d8de94c62a7 100644
 --- a/src/gallium/drivers/zink/zink_bo.c
 +++ b/src/gallium/drivers/zink/zink_bo.c
 @@ -35,7 +35,7 @@
@@ -1876,17 +1595,17 @@ index a69a050f323..15dfab617d3 100644
  #include <xf86drm.h>
  #endif
 diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
-index 0947e77973e..1472a495b5a 100644
+index f42f340657b..da9518771bf 100644
 --- a/src/gallium/drivers/zink/zink_screen.c
 +++ b/src/gallium/drivers/zink/zink_screen.c
-@@ -252,9 +252,11 @@ disk_cache_init(struct zink_screen *screen)
+@@ -269,9 +269,11 @@ disk_cache_init(struct zink_screen *screen)
     /* Hash in the zink driver build. */
     const struct build_id_note *note =
         build_id_find_nhdr_for_addr(disk_cache_init);
 -   unsigned build_id_len = build_id_length(note);
 -   assert(note && build_id_len == 20); /* sha1 */
 -   _mesa_sha1_update(&ctx, build_id_data(note), build_id_len);
-+   if(note != NULL) {
++   if (note != NULL) {
 +      unsigned build_id_len = build_id_length(note);
 +      assert(note && build_id_len == 20); /* sha1 */
 +      _mesa_sha1_update(&ctx, build_id_data(note), build_id_len);
@@ -1894,17 +1613,17 @@ index 0947e77973e..1472a495b5a 100644
  #endif
  
     /* Hash in the Vulkan pipeline cache UUID to identify the combination of
-@@ -2711,7 +2713,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
+@@ -3143,7 +3145,7 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
  
     u_trace_state_init();
  
 -   screen->loader_lib = util_dl_open(VK_LIBNAME);
 +   screen->loader_lib = (void*) strtoul(getenv("VULKAN_PTR"), NULL, 0x10);
-    if (!screen->loader_lib)
+    if (!screen->loader_lib) {
+       mesa_loge("ZINK: failed to load "VK_LIBNAME);
        goto fail;
- 
-@@ -2722,15 +2724,15 @@ zink_internal_create_screen(const struct pipe_screen_config *config)
-       goto fail;
+@@ -3158,15 +3160,6 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
+    }
  
     screen->instance_info.loader_version = zink_get_loader_version(screen);
 -   if (config) {
@@ -1914,19 +1633,10 @@ index 0947e77973e..1472a495b5a 100644
 -      screen->driconf.glsl_correct_derivatives_after_discard = driQueryOptionb(config->options, "glsl_correct_derivatives_after_discard");
 -      //screen->driconf.inline_uniforms = driQueryOptionb(config->options, "radeonsi_inline_uniforms");
 -      screen->driconf.emulate_point_smooth = driQueryOptionb(config->options, "zink_emulate_point_smooth");
--      screen->instance_info.disable_xcb_surface = driQueryOptionb(config->options, "disable_xcb_surface");
+-      screen->driconf.zink_shader_object_enable = driQueryOptionb(config->options, "zink_shader_object_enable");
 -   }
-+   // if (config) {
-+   //    driParseConfigFiles(config->options, config->options_info, 0, "zink",
-+   //                        NULL, NULL, NULL, 0, NULL, 0);
-+   //    screen->driconf.dual_color_blend_by_location = driQueryOptionb(config->options, "dual_color_blend_by_location");
-+   //    screen->driconf.glsl_correct_derivatives_after_discard = driQueryOptionb(config->options, "glsl_correct_derivatives_after_discard");
-+   //    //screen->driconf.inline_uniforms = driQueryOptionb(config->options, "radeonsi_inline_uniforms");
-+   //    screen->driconf.emulate_point_smooth = driQueryOptionb(config->options, "zink_emulate_point_smooth");
-+   //    screen->instance_info.disable_xcb_surface = driQueryOptionb(config->options, "disable_xcb_surface");
-+   // }
  
-    if (!zink_create_instance(screen))
+    if (!zink_create_instance(screen, dev_major > 0 && dev_major < 255))
        goto fail;
 diff --git a/src/gallium/targets/osmesa/meson.build b/src/gallium/targets/osmesa/meson.build
 index d16e7858c63..1799752674a 100644
@@ -1946,7 +1656,7 @@ index d16e7858c63..1799752674a 100644
    darwin_versions : '9.0.0',
    install : true,
 diff --git a/src/util/os_misc.c b/src/util/os_misc.c
-index 6ae97b983bb..c7eb58bdfaa 100644
+index 02286121542..4374866981a 100644
 --- a/src/util/os_misc.c
 +++ b/src/util/os_misc.c
 @@ -56,7 +56,6 @@
@@ -1954,7 +1664,7 @@ index 6ae97b983bb..c7eb58bdfaa 100644
  #  include <unistd.h>
  #  include <log/log.h>
 -#  include <cutils/properties.h>
- #elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD
+ #elif DETECT_OS_LINUX || DETECT_OS_CYGWIN || DETECT_OS_SOLARIS || DETECT_OS_HURD || DETECT_OS_MANAGARM
  #  include <unistd.h>
  #elif DETECT_OS_OPENBSD || DETECT_OS_FREEBSD
 @@ -128,62 +127,10 @@ os_log_message(const char *message)
@@ -2021,13 +1731,14 @@ index 6ae97b983bb..c7eb58bdfaa 100644
  }
  
 diff --git a/src/util/perf/cpu_trace.h b/src/util/perf/cpu_trace.h
-index a4ba4d73d9e..4dbc30c841f 100644
+index 6cebb51bafd..ade4453abec 100644
 --- a/src/util/perf/cpu_trace.h
 +++ b/src/util/perf/cpu_trace.h
-@@ -27,19 +27,6 @@
-          util_perfetto_trace_end(category);                                  \
+@@ -27,20 +27,6 @@
+       if (unlikely(util_perfetto_is_tracing_enabled()))                      \
+          util_perfetto_trace_end();                                          \
     } while (0)
- 
+-
 -/* NOTE: for now disable atrace for C++ to workaround a ndk bug with ordering
 - * between stdatomic.h and atomic.h.  See:
 - *
@@ -2037,28 +1748,27 @@ index a4ba4d73d9e..4dbc30c841f 100644
 -
 -#include <cutils/trace.h>
 -
--#define _MESA_TRACE_BEGIN(category, name)                                    \
+-#define _MESA_TRACE_BEGIN(name)                                              \
 -   atrace_begin(ATRACE_TAG_GRAPHICS, name)
--#define _MESA_TRACE_END(category) atrace_end(ATRACE_TAG_GRAPHICS)
+-#define _MESA_TRACE_END() atrace_end(ATRACE_TAG_GRAPHICS)
 -
  #else
  
- #define _MESA_TRACE_BEGIN(category, name)
+ #define _MESA_TRACE_BEGIN(name)
 diff --git a/src/util/u_debug_stack_android.cpp b/src/util/u_debug_stack_android.cpp
-index 4481771baf9..34148c82e01 100644
+index 4481771baf9..f17f4f3ad8e 100644
 --- a/src/util/u_debug_stack_android.cpp
 +++ b/src/util/u_debug_stack_android.cpp
-@@ -24,9 +24,6 @@
- #include "u_debug_stack.h"
+@@ -25,8 +25,6 @@
  
  #if WITH_LIBBACKTRACE
--
+ 
 -#include <backtrace/Backtrace.h>
 -
  #include "util/simple_mtx.h"
  #include "util/u_debug.h"
  #include "util/hash_table.h"
-@@ -55,56 +52,12 @@ debug_backtrace_capture(debug_stack_frame *backtrace,
+@@ -55,56 +53,12 @@ debug_backtrace_capture(debug_stack_frame *backtrace,
                          unsigned start_frame,
                          unsigned nr_frames)
  {
@@ -2115,7 +1825,7 @@ index 4481771baf9..34148c82e01 100644
  }
  
  void
-@@ -112,16 +65,6 @@ debug_backtrace_print(FILE *f,
+@@ -112,16 +66,6 @@ debug_backtrace_print(FILE *f,
                        const debug_stack_frame *backtrace,
                        unsigned nr_frames)
  {
