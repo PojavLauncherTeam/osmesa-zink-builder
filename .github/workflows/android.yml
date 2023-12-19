@@ -45,7 +45,7 @@ jobs:
           envsubst <android-${{matrix.arch}} >build-crossfile
           git clone --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git
           cd mesa
-          git apply --reject --whitespace=fix ../mesa-zink-freedreno.diff || echo "git apply failed"
+          git apply -v --whitespace=fix ../mesa-zink.diff || echo "git apply failed"
           meson setup "build-android" \
             --prefix=/tmp/mesa \
             --cross-file "../build-crossfile" \
