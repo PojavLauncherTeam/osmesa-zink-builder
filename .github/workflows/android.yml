@@ -19,6 +19,7 @@ jobs:
       - uses: actions/checkout@v2
       - name: Build
         run: |
+          mkdir /tmp/vulkan
           sudo apt update
           sudo apt install -y meson libxrandr-dev libxxf86vm-dev libxcb-*-dev libx11-xcb-dev libxfixes-dev libdrm-dev libx11-dev
           pip3 install mako
@@ -86,7 +87,6 @@ jobs:
               -Dfreedreno-kmds=kgsl \
               -Db_lto=true
             ninja -C "build-android-vulkan"
-            mkdir /tmp/vulkan
             cp build-android-vulkan/src/freedreno/vulkan/libvulkan_freedreno.so /tmp/vulkan
          fi
 
@@ -95,6 +95,7 @@ jobs:
         with:
           name: libOSMesa_${{matrix.arch}}
           path: /tmp/mesa
+
       - name: Upload Vulkan
         uses: actions/upload-artifact@v2
         with:
