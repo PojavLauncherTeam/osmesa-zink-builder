@@ -8,7 +8,7 @@ jobs:
   build:
     strategy:
       matrix:
-        arch: [ "arm32", "aarch64" ]
+        arch: [ "arm32", "aarch64", "x86_64" ]
       fail-fast: false
 
     name: "Build for ${{matrix.arch}}"
@@ -67,7 +67,12 @@ jobs:
             -Dshared-glapi=false \
             -Dandroid-libbacktrace=disabled \
             -Dbuildtype=release
-          ninja -C "build-android" install
+          cd build-android
+          if [ ${{matrix.arch}} == 'x86_64' ]
+          then
+            meson configure -Dgallium-drivers=zink
+          fi
+          ninja install
       - name: Upload libraries
         uses: actions/upload-artifact@v2
         with:
