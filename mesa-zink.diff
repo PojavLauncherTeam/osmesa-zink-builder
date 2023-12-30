@@ -209,10 +209,10 @@ index 7261577..f2ceb88 100644
  }
  
 diff --git a/src/util/perf/cpu_trace.h b/src/util/perf/cpu_trace.h
-index 6cebb51..779c434 100644
+index 6cebb51..c1726b1 100644
 --- a/src/util/perf/cpu_trace.h
 +++ b/src/util/perf/cpu_trace.h
-@@ -28,20 +28,7 @@
+@@ -28,18 +28,6 @@
           util_perfetto_trace_end();                                          \
     } while (0)
  
@@ -224,12 +224,10 @@ index 6cebb51..779c434 100644
 -#elif defined(ANDROID) && !defined(__cplusplus)
 -
 -#include <cutils/trace.h>
- 
+-
 -#define _MESA_TRACE_BEGIN(name)                                              \
 -   atrace_begin(ATRACE_TAG_GRAPHICS, name)
 -#define _MESA_TRACE_END() atrace_end(ATRACE_TAG_GRAPHICS)
--
--#else
  
- #define _MESA_TRACE_BEGIN(name)
- #define _MESA_TRACE_END()
+ #else
+ 
